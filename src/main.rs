@@ -94,6 +94,7 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
     let mut count = 0;
     let mut count_global = 0;
     let iter = reader.deserialize();
+    let mut tasks = vec![];
     for (i, result) in iter.enumerate() {
         let record: AddressDb = result.context("Failed mapping to AddressDb")?;
         let private_key = encrypt(&record.private_key, key, &record.id)?;
@@ -113,13 +114,14 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
             let sqlx_client_copy = sqlx_client.clone();
             let count_copy = i;
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            tokio::spawn(async move {
+            let tsk = tokio::spawn(async move {
                 if let Err(err) = sqlx_client_copy.update(buffer_copy).await {
                     println!("ERROR: Failed to make db transaction: {:?}", err);
                 }
                 println!("Counter: {}", count_copy);
                 drop(permit);
             });
+            tasks.push(tsk);
             buffer.clear();
         }
 
@@ -128,14 +130,17 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
     }
 
     let permit = semaphore.clone().acquire_owned().await.unwrap();
-    tokio::spawn(async move {
-        if let Err(err) = sqlx_client.update(buffer).await {
+    let tsk = tokio::spawn(async move {
+        if let Err(err) = sqlx_client.update(buffer.clone()).await {
             println!("ERROR: Failed to make db transaction: {:?}", err);
         }
         println!("Counter: {}", count_global + buffer.len());
         println!("Finish");
         drop(permit);
     });
+    tasks.push(tsk);
+
+    futures::future::join_all(tasks).await;
 
     Ok(())
 }
