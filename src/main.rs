@@ -2,6 +2,7 @@ use std::convert::TryInto;
 use std::env;
 use std::fs::File;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Error, Result};
 use argon2::{
@@ -14,6 +15,7 @@ use clap::{AppSettings, Clap};
 use csv::Reader;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Uuid;
+use tokio::sync::Semaphore;
 
 #[derive(Clap)]
 #[clap(setting = AppSettings::ColoredHelp)]
@@ -86,6 +88,8 @@ async fn main() -> Result<()> {
 }
 
 async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -> Result<()> {
+    let semaphore = Arc::new(Semaphore::new(16));
+
     let mut buffer = Vec::new();
     let mut count = 0;
     let iter = reader.deserialize();
@@ -107,11 +111,13 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
             let buffer_copy = buffer.clone();
             let sqlx_client_copy = sqlx_client.clone();
             let count_copy = i;
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
             tokio::spawn(async move {
                 if let Err(err) = sqlx_client_copy.update(buffer_copy).await {
                     println!("ERROR: Failed to make db transaction: {:?}", err);
                 }
                 println!("Counter: {}", count_copy);
+                drop(permit);
             });
             buffer.clear();
         }
