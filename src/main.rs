@@ -28,7 +28,7 @@ struct Options {
     with_headers: bool,
 }
 
-#[tokio::main]
+#[tokio::main(worker_threads = 16)]
 async fn main() -> Result<()> {
     env_logger::init();
 
@@ -88,9 +88,8 @@ async fn main() -> Result<()> {
 async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -> Result<()> {
     let mut buffer = Vec::new();
     let mut count = 0;
-    let mut count_global = 0;
     let iter = reader.deserialize();
-    for result in iter {
+    for (i, result) in iter.enumerate() {
         let record: AddressDb = result.context("Failed mapping to AddressDb")?;
         let private_key = encrypt(&record.private_key, key, &record.id)?;
 
@@ -103,23 +102,21 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
 
         buffer.push(item);
 
-        if count == 1000 {
+        if count == 1000 || iter.count() == i - 1 {
             count = 0;
-            sqlx_client.update(&buffer).await?;
+            let buffer_copy = buffer.clone();
+            let sqlx_client_copy = sqlx_client.clone();
+            let count_copy = i;
+            tokio::spawn(async move {
+                if let Err(err) = sqlx_client_copy.update(buffer_copy).await {
+                    println!("ERROR: Failed to make db transaction: {:?}", err);
+                }
+                println!("Counter: {}", count_copy);
+            });
             buffer.clear();
         }
 
         count += 1;
-        count_global += 1;
-
-        println!(
-            "{}. {}:{} updated",
-            count_global, record.workchain_id, record.hex
-        )
-
-        /*sqlx_client
-        .update_private_key(record.workchain_id, &record.hex, &private_key)
-        .await?;*/
     }
 
     Ok(())
@@ -195,7 +192,7 @@ impl SqlxClient {
         Ok(())
     }
 
-    pub async fn update(&self, items: &[AddressDb]) -> Result<()> {
+    pub async fn update(&self, items: Vec<AddressDb>) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         for address in items.iter() {
