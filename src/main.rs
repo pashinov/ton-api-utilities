@@ -92,14 +92,11 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
 
     let mut buffer = Vec::new();
     let mut count = 0;
+    let mut count_global = 0;
     let iter = reader.deserialize();
     for (i, result) in iter.enumerate() {
         let record: AddressDb = result.context("Failed mapping to AddressDb")?;
         let private_key = encrypt(&record.private_key, key, &record.id)?;
-        println!("{}", private_key);
-
-        let encrypted_private_key = base64::encode(decrypt(&private_key, key, &record.id)?)?;
-        println!("{}", encrypted_private_key);
 
         let item = AddressDb {
             id: record.id,
@@ -127,13 +124,17 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
         }
 
         count += 1;
+        count_global += 1;
     }
 
+    let permit = semaphore.clone().acquire_owned().await.unwrap();
     tokio::spawn(async move {
         if let Err(err) = sqlx_client.update(buffer).await {
             println!("ERROR: Failed to make db transaction: {:?}", err);
         }
+        println!("Counter: {}", count_global + buffer.len());
         println!("Finish");
+        drop(permit);
     });
 
     Ok(())
