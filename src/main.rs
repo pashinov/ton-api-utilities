@@ -96,6 +96,10 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
     for (i, result) in iter.enumerate() {
         let record: AddressDb = result.context("Failed mapping to AddressDb")?;
         let private_key = encrypt(&record.private_key, key, &record.id)?;
+        println!("{}", private_key);
+
+        let encrypted_private_key = base64::encode(decrypt(&private_key, key, &record.id)?)?;
+        println!("{}", encrypted_private_key);
 
         let item = AddressDb {
             id: record.id,
@@ -145,6 +149,16 @@ fn encrypt(private_key: &str, key: [u8; 32], id: &uuid::Uuid) -> Result<String> 
         .unwrap();
 
     Ok(base64::encode(res))
+}
+
+pub fn decrypt(private_key: &str, key: [u8; 32], id: &uuid::Uuid) -> Result<Vec<u8>> {
+    use chacha20poly1305::aead::NewAead;
+    let nonce = Nonce::from_slice(&id.as_bytes()[0..12]);
+    let key = chacha20poly1305::Key::from_slice(&key[..]);
+    let mut decrypter = ChaCha20Poly1305::new(key);
+    decrypter
+        .decrypt(nonce, base64::decode(private_key)?.as_slice())
+        .map_err(Error::msg)
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
