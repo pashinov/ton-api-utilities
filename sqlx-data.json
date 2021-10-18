@@ -1,5 +1,19 @@
 {
   "db": "PostgreSQL",
+  "0a0b201401e50856038a39c35ea6bbebca304dcf9cafc6026b88cecbb7239d48": {
+    "query": "UPDATE address SET private_key = $1\n                WHERE workchain_id = $2 AND hex = $3",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Int4",
+          "Text"
+        ]
+      },
+      "nullable": []
+    }
+  },
   "253027fb40f8302bd69b87f8b517d1fb03b4391ef3ad4c0ceffb475ab4ebad03": {
     "query": "SELECT id\n                FROM address\n                WHERE workchain_id = $1 AND hex = $2",
     "describe": {

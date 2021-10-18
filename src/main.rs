@@ -86,7 +86,9 @@ async fn main() -> Result<()> {
 }
 
 async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -> Result<()> {
+    let mut buffer = Vec::new();
     let mut count = 0;
+    let mut count_global = 0;
     let iter = reader.deserialize();
     for result in iter {
         let record: AddressDb = result.context("Failed mapping to AddressDb")?;
@@ -94,12 +96,30 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
         let id = sqlx_client.get_id(record.workchain_id, &record.hex).await?;
         let private_key = encrypt(&record.private_key, key, &id)?;
 
-        sqlx_client
-            .update_private_key(record.workchain_id, &record.hex, &private_key)
-            .await?;
+        let item = AddressDb {
+            workchain_id: record.workchain_id,
+            hex: record.hex.clone(),
+            private_key,
+        };
+
+        buffer.push(item);
+
+        if count == 1000 {
+            count = 0;
+            sqlx_client.update(&buffer).await?;
+        }
 
         count += 1;
-        println!("{}. {}:{} updated", count, record.workchain_id, record.hex)
+        count_global += 1;
+
+        println!(
+            "{}. {}:{} updated",
+            count_global, record.workchain_id, record.hex
+        )
+
+        /*sqlx_client
+        .update_private_key(record.workchain_id, &record.hex, &private_key)
+        .await?;*/
     }
 
     Ok(())
@@ -122,6 +142,13 @@ pub struct AddressDb {
     pub workchain_id: i32,
     pub hex: String,
     pub private_key: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
+pub struct NewAddressDb {
+    pub id: Uuid,
+    pub workchain_id: i32,
+    pub hex: String,
 }
 
 #[derive(Clone)]
@@ -161,8 +188,28 @@ impl SqlxClient {
             workchain_id,
             hex,
         )
-        .fetch_one(&self.pool)
+        .execute(&self.pool)
         .await?;
+
+        Ok(())
+    }
+
+    pub async fn update(&self, items: &[AddressDb]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        for address in items.iter() {
+            let _address = sqlx::query!(
+                r#"UPDATE address SET private_key = $1
+                WHERE workchain_id = $2 AND hex = $3"#,
+                address.private_key,
+                address.workchain_id,
+                address.hex,
+            )
+            .execute(&mut tx)
+            .await?;
+        }
+
+        tx.commit().await?;
 
         Ok(())
     }
