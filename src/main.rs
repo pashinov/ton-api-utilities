@@ -92,11 +92,10 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
     let iter = reader.deserialize();
     for result in iter {
         let record: AddressDb = result.context("Failed mapping to AddressDb")?;
-
-        let id = sqlx_client.get_id(record.workchain_id, &record.hex).await?;
-        let private_key = encrypt(&record.private_key, key, &id)?;
+        let private_key = encrypt(&record.private_key, key, &record.id)?;
 
         let item = AddressDb {
+            id: record.id,
             workchain_id: record.workchain_id,
             hex: record.hex.clone(),
             private_key,
@@ -140,6 +139,7 @@ fn encrypt(private_key: &str, key: [u8; 32], id: &uuid::Uuid) -> Result<String> 
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
 pub struct AddressDb {
+    pub id: Uuid,
     pub workchain_id: i32,
     pub hex: String,
     pub private_key: String,
