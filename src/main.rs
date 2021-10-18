@@ -107,6 +107,7 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
         if count == 1000 {
             count = 0;
             sqlx_client.update(&buffer).await?;
+            buffer.clear();
         }
 
         count += 1;
