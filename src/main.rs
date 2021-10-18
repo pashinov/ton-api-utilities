@@ -102,7 +102,7 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
 
         buffer.push(item);
 
-        if count == 1000 || iter.count() == i - 1 {
+        if count == 1000 {
             count = 0;
             let buffer_copy = buffer.clone();
             let sqlx_client_copy = sqlx_client.clone();
@@ -118,6 +118,13 @@ async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -
 
         count += 1;
     }
+
+    tokio::spawn(async move {
+        if let Err(err) = sqlx_client.update(buffer).await {
+            println!("ERROR: Failed to make db transaction: {:?}", err);
+        }
+        println!("Finish");
+    });
 
     Ok(())
 }
