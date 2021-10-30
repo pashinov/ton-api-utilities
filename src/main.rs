@@ -1,247 +1,134 @@
 use std::convert::TryInto;
-use std::env;
-use std::fs::File;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::str::FromStr;
 
-use anyhow::{Context, Error, Result};
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
-    Argon2,
-};
-use chacha20poly1305::aead::AeadMut;
-use chacha20poly1305::{ChaCha20Poly1305, Nonce};
-use clap::{AppSettings, Clap};
-use csv::Reader;
-use sqlx::postgres::{PgPool, PgPoolOptions};
-use sqlx::types::Uuid;
-use tokio::sync::Semaphore;
+use anyhow::{Context, Result};
+use argh::FromArgs;
+use argon2::password_hash::PasswordHasher;
 
-#[derive(Clap)]
-#[clap(setting = AppSettings::ColoredHelp)]
-struct Options {
-    #[clap(short, long)]
-    input: PathBuf,
-    #[clap(short, long)]
-    key: String,
-    #[clap(short, long)]
-    salt: Option<String>,
-    #[clap(short, long)]
-    with_headers: bool,
-}
+use ton_api_utility::export::*;
+use ton_api_utility::import::*;
+use ton_api_utility::models::*;
 
-#[tokio::main(worker_threads = 16)]
+#[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
-
-    let args = Options::parse();
-    let Options {
-        input,
-        key,
-        salt,
-        with_headers,
-    } = args;
-    let key_string = key;
-    let reader = csv::ReaderBuilder::new()
-        .has_headers(with_headers)
-        .from_path(input)
-        .context("Couldn't read input file")?;
-
-    let database_url =
-        env::var("DATABASE_URL").context("The DATABASE_URL environment variable must be set")?;
-    let db_pool_size = env::var("DATABASE_POOL")
-        .context("The DATABASE_POOL environment variable must be set")?
-        .parse::<u32>()
-        .context("failed to get pg pool")?;
-
-    let pool = PgPoolOptions::new()
-        .max_connections(db_pool_size)
-        .connect(&database_url)
-        .await
-        .context("fail pg pool")?;
-
-    let sqlx_client = SqlxClient::new(pool);
-
-    let salt = match salt {
-        Some(salt) => SaltString::new(&salt).map_err(Error::msg)?,
-        None => SaltString::generate(&mut OsRng),
-    };
-    println!("Password salt: {}", salt.as_str());
-
-    let mut options = argon2::ParamsBuilder::default();
-    let options = options
-        .output_len(32) //chacha key size
-        .and_then(|x| x.clone().params())
-        .map_err(Error::msg)?;
-
-    // Argon2 with default params (Argon2id v19)
-    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, options);
-
-    let key = argon2
-        .hash_password(key_string.as_bytes(), &salt)
-        .map_err(Error::msg)?
-        .hash
-        .context("No hash")?
-        .as_bytes()
-        .try_into()?;
-    run(sqlx_client, reader, key).await
+    run(argh::from_env()).await
+}
+async fn run(app: App) -> Result<()> {
+    match app.command {
+        Subcommand::Export(run) => run.execute().await,
+        Subcommand::Import(run) => run.execute().await,
+    }
 }
 
-async fn run(sqlx_client: SqlxClient, mut reader: Reader<File>, key: [u8; 32]) -> Result<()> {
-    let semaphore = Arc::new(Semaphore::new(16));
+#[derive(Debug, PartialEq, FromArgs)]
+#[argh(description = "TON API migration utility")]
+struct App {
+    #[argh(subcommand)]
+    command: Subcommand,
+}
 
-    let mut buffer = Vec::new();
-    let mut count = 0;
-    let mut count_global = 0;
-    let iter = reader.deserialize();
-    let mut tasks = vec![];
-    for (i, result) in iter.enumerate() {
-        let record: AddressDb = result.context("Failed mapping to AddressDb")?;
-        let private_key = encrypt(&record.private_key, key, &record.id)?;
+#[derive(Debug, PartialEq, FromArgs)]
+#[argh(subcommand)]
+enum Subcommand {
+    Export(CmdExport),
+    Import(CmdImport),
+}
 
-        let item = AddressDb {
-            id: record.id,
-            workchain_id: record.workchain_id,
-            hex: record.hex.clone(),
-            private_key,
+#[derive(Debug, PartialEq, FromArgs)]
+/// Export addresses and transactions
+/// from DB to jsonl
+#[argh(subcommand, name = "export")]
+struct CmdExport {
+    /// service id
+    #[argh(option, short = 'i')]
+    id: String,
+    /// export path
+    #[argh(option, short = 'p')]
+    path: Option<String>,
+    /// secret
+    #[argh(option, short = 'k')]
+    key: String,
+    /// salt
+    #[argh(option, short = 's')]
+    salt: String,
+}
+
+impl CmdExport {
+    async fn execute(self) -> Result<()> {
+        let service_id = ServiceId::from_str(&self.id)?;
+
+        let mut options = argon2::ParamsBuilder::default();
+        let options = options
+            .output_len(32) //chacha key size
+            .and_then(|x| x.clone().params())
+            .unwrap();
+
+        // Argon2 with default params (Argon2id v19)
+        let argon2 =
+            argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, options);
+
+        let key = argon2
+            .hash_password(self.key.as_bytes(), &self.salt)
+            .unwrap()
+            .hash
+            .context("No hash")?
+            .as_bytes()
+            .try_into()?;
+
+        let path = match self.path {
+            Some(path) => PathBuf::from_str(&path)?,
+            None => PathBuf::from_str("./data")?,
         };
 
-        buffer.push(item);
+        // Prepare data folder
+        std::fs::create_dir_all(&path)?;
 
-        if count == 1000 {
-            count = 0;
-            let buffer_copy = buffer.clone();
-            let sqlx_client_copy = sqlx_client.clone();
-            let count_copy = i;
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
-            let tsk = tokio::spawn(async move {
-                if let Err(err) = sqlx_client_copy.update(buffer_copy).await {
-                    println!("ERROR: Failed to make db transaction: {:?}", err);
-                }
-                println!("Counter: {}", count_copy);
-                drop(permit);
-            });
-            tasks.push(tsk);
-            buffer.clear();
-        }
-
-        count += 1;
-        count_global += 1;
+        run_export(service_id, path, key).await
     }
-
-    let permit = semaphore.clone().acquire_owned().await.unwrap();
-    let tsk = tokio::spawn(async move {
-        if let Err(err) = sqlx_client.update(buffer.clone()).await {
-            println!("ERROR: Failed to make db transaction: {:?}", err);
-        }
-        println!("Counter: {}", count_global + buffer.len());
-        println!("Finish");
-        drop(permit);
-    });
-    tasks.push(tsk);
-
-    futures::future::join_all(tasks).await;
-
-    Ok(())
 }
 
-fn encrypt(private_key: &str, key: [u8; 32], id: &uuid::Uuid) -> Result<String> {
-    use chacha20poly1305::aead::NewAead;
-    let nonce = Nonce::from_slice(&id.as_bytes()[0..12]);
-    let key = chacha20poly1305::Key::from_slice(&key[..]);
-    let mut encryptor = ChaCha20Poly1305::new(key);
-    let res = encryptor
-        .encrypt(nonce, base64::decode(&private_key)?.as_slice())
-        .unwrap();
-
-    Ok(base64::encode(res))
+#[derive(Debug, PartialEq, FromArgs)]
+/// Import addresses and transactions
+/// from jsonl to DB
+#[argh(subcommand, name = "import")]
+struct CmdImport {
+    /// export path
+    #[argh(option, short = 'p')]
+    path: Option<String>,
+    /// secret
+    #[argh(option, short = 'k')]
+    key: String,
+    /// salt
+    #[argh(option, short = 's')]
+    salt: String,
 }
 
-pub fn decrypt(private_key: &str, key: [u8; 32], id: &uuid::Uuid) -> Result<Vec<u8>> {
-    use chacha20poly1305::aead::NewAead;
-    let nonce = Nonce::from_slice(&id.as_bytes()[0..12]);
-    let key = chacha20poly1305::Key::from_slice(&key[..]);
-    let mut decrypter = ChaCha20Poly1305::new(key);
-    decrypter
-        .decrypt(nonce, base64::decode(private_key)?.as_slice())
-        .map_err(Error::msg)
-}
+impl CmdImport {
+    async fn execute(self) -> Result<()> {
+        let mut options = argon2::ParamsBuilder::default();
+        let options = options
+            .output_len(32) //chacha key size
+            .and_then(|x| x.clone().params())
+            .unwrap();
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
-pub struct AddressDb {
-    pub id: Uuid,
-    pub workchain_id: i32,
-    pub hex: String,
-    pub private_key: String,
-}
+        // Argon2 with default params (Argon2id v19)
+        let argon2 =
+            argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, options);
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
-pub struct NewAddressDb {
-    pub id: Uuid,
-    pub workchain_id: i32,
-    pub hex: String,
-}
+        let key = argon2
+            .hash_password(self.key.as_bytes(), &self.salt)
+            .unwrap()
+            .hash
+            .context("No hash")?
+            .as_bytes()
+            .try_into()?;
 
-#[derive(Clone)]
-pub struct SqlxClient {
-    pool: PgPool,
-}
+        let path = match self.path {
+            Some(path) => PathBuf::from_str(&path)?,
+            None => PathBuf::from_str("./data")?,
+        };
 
-impl SqlxClient {
-    pub fn new(pool: PgPool) -> SqlxClient {
-        SqlxClient { pool }
-    }
-
-    pub async fn get_id(&self, workchain_id: i32, hex: &str) -> Result<Uuid> {
-        sqlx::query!(
-            r#"SELECT id
-                FROM address
-                WHERE workchain_id = $1 AND hex = $2"#,
-            workchain_id,
-            hex,
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(From::from)
-        .map(|x| x.id)
-    }
-
-    pub async fn update_private_key(
-        &self,
-        workchain_id: i32,
-        hex: &str,
-        private_key: &str,
-    ) -> Result<()> {
-        let _address = sqlx::query!(
-            r#"UPDATE address SET private_key = $1
-            WHERE workchain_id = $2 AND hex = $3"#,
-            private_key,
-            workchain_id,
-            hex,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn update(&self, items: Vec<AddressDb>) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        for address in items.iter() {
-            let _address = sqlx::query!(
-                r#"UPDATE address SET private_key = $1
-                WHERE workchain_id = $2 AND hex = $3"#,
-                address.private_key,
-                address.workchain_id,
-                address.hex,
-            )
-            .execute(&mut tx)
-            .await?;
-        }
-
-        tx.commit().await?;
-
-        Ok(())
+        run_import(path, key).await
     }
 }
