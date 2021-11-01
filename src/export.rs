@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use bigdecimal::BigDecimal;
 
 use crate::models::*;
 use crate::sqlx_client::*;
@@ -52,6 +53,7 @@ async fn export_addresses(
     for address in addresses.iter_mut() {
         let private_key = decrypt(&address.private_key, key, &address.id)?;
         address.private_key = base64::encode(private_key);
+        address.balance = BigDecimal::from(0);
 
         let address = serde_json::to_string(address)? + "\n";
 
