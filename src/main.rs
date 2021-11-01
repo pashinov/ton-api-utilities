@@ -93,6 +93,9 @@ impl CmdExport {
 /// from jsonl to DB
 #[argh(subcommand, name = "import")]
 struct CmdImport {
+    /// service id
+    #[argh(option, short = 'i')]
+    id: Option<String>,
     /// export path
     #[argh(option, short = 'p')]
     path: Option<String>,
@@ -106,6 +109,8 @@ struct CmdImport {
 
 impl CmdImport {
     async fn execute(self) -> Result<()> {
+        let service_id = self.id;
+
         let mut options = argon2::ParamsBuilder::default();
         let options = options
             .output_len(32) //chacha key size
@@ -129,6 +134,6 @@ impl CmdImport {
             None => PathBuf::from_str("./data")?,
         };
 
-        run_import(path, key).await
+        run_import(service_id, path, key).await
     }
 }

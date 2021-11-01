@@ -31,7 +31,7 @@ async fn export_transactions(
     let mut output = File::create(path)?;
     for transaction in transactions.iter() {
         let transaction = serde_json::to_string(transaction)? + "\n";
-        output.write(transaction.as_bytes())?;
+        output.write_all(transaction.as_bytes())?;
     }
 
     output.flush()?;
@@ -57,7 +57,7 @@ async fn export_addresses(
 
         let address = serde_json::to_string(address)? + "\n";
 
-        output.write(address.as_bytes())?;
+        output.write_all(address.as_bytes())?;
     }
 
     output.flush()?;
