@@ -20,6 +20,8 @@ pub async fn run_import(service_id: Option<String>, path: PathBuf, key: [u8; 32]
 
     import_addresses(&service_id, &sqlx_client, path.clone(), key).await?;
     import_transactions(&service_id, &sqlx_client, path.clone()).await?;
+    import_token_owners(&sqlx_client, path.clone()).await?;
+    import_token_transactions(&service_id, &sqlx_client, path.clone()).await?;
 
     Ok(())
 }
@@ -40,6 +42,29 @@ async fn import_transactions(
             transaction.service_id = *service_id;
         }
         sqlx_client.create_transaction(transaction).await?;
+    }
+
+    Ok(())
+}
+
+async fn import_token_transactions(
+    service_id: &Option<ServiceId>,
+    sqlx_client: &SqlxClient,
+    mut path: PathBuf,
+) -> Result<()> {
+    path.push("token_transactions.jsonl");
+
+    let file = File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+
+    for line in reader.lines() {
+        let mut token_transaction: TokenTransactionDb = serde_json::from_str(line?.as_str())?;
+        if let Some(service_id) = service_id {
+            token_transaction.service_id = *service_id;
+        }
+        sqlx_client
+            .create_token_transaction(token_transaction)
+            .await?;
     }
 
     Ok(())
@@ -68,6 +93,20 @@ async fn import_addresses(
     }
 
     sqlx_client.create_addresses(addresses).await?;
+
+    Ok(())
+}
+
+async fn import_token_owners(sqlx_client: &SqlxClient, mut path: PathBuf) -> Result<()> {
+    path.push("token_owners.jsonl");
+
+    let file = File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+
+    for line in reader.lines() {
+        let token_owner: TokenOwnerDb = serde_json::from_str(line?.as_str())?;
+        sqlx_client.create_token_owner(token_owner).await?;
+    }
 
     Ok(())
 }

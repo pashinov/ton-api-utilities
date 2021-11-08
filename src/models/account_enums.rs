@@ -23,3 +23,11 @@ pub enum TonTransactionDirection {
     Send,
     Receive,
 }
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "twa_token_transaction_status", rename_all = "PascalCase")]
+pub enum TonTokenTransactionStatus {
+    New,
+    Done,
+    Error,
+}

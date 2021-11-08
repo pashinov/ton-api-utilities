@@ -1,6 +1,8 @@
 use sqlx::PgPool;
 
 mod addresses;
+mod token_owners;
+mod token_transactions;
 mod transactions;
 
 #[derive(Clone)]

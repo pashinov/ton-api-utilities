@@ -37,6 +37,28 @@ pub struct TransactionDb {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
+pub struct TokenTransactionDb {
+    pub id: Uuid,
+    pub service_id: ServiceId,
+    pub transaction_hash: Option<String>,
+    pub transaction_timestamp: Option<NaiveDateTime>,
+    pub message_hash: String,
+    pub owner_message_hash: Option<String>,
+    pub account_workchain_id: i32,
+    pub account_hex: String,
+    pub value: BigDecimal,
+    pub root_address: String,
+    pub payload: Option<Vec<u8>>,
+    pub error: Option<String>,
+    pub block_hash: Option<String>,
+    pub block_time: Option<i32>,
+    pub direction: TonTransactionDirection,
+    pub status: TonTokenTransactionStatus,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
 pub struct AddressDb {
     pub id: Uuid,
     pub service_id: ServiceId,
@@ -52,4 +74,14 @@ pub struct AddressDb {
     pub balance: BigDecimal,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
+pub struct TokenOwnerDb {
+    pub address: String,
+    pub owner_account_workchain_id: i32,
+    pub owner_account_hex: String,
+    pub root_address: String,
+    pub code_hash: Vec<u8>,
+    pub created_at: NaiveDateTime,
 }

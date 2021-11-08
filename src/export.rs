@@ -14,6 +14,8 @@ pub async fn run_export(service_id: ServiceId, path: PathBuf, key: [u8; 32]) -> 
     let sqlx_client = SqlxClient::new(pool);
 
     export_transactions(service_id, &sqlx_client, path.clone()).await?;
+    export_token_owners(service_id, &sqlx_client, path.clone()).await?;
+    export_token_transactions(service_id, &sqlx_client, path.clone()).await?;
     export_addresses(service_id, &sqlx_client, path.clone(), key).await?;
 
     Ok(())
@@ -32,6 +34,26 @@ async fn export_transactions(
     for transaction in transactions.iter() {
         let transaction = serde_json::to_string(transaction)? + "\n";
         output.write_all(transaction.as_bytes())?;
+    }
+
+    output.flush()?;
+
+    Ok(())
+}
+
+async fn export_token_transactions(
+    service_id: ServiceId,
+    sqlx_client: &SqlxClient,
+    mut path: PathBuf,
+) -> Result<()> {
+    let token_transactions = sqlx_client.get_all_token_transactions(service_id).await?;
+
+    path.push("token_transactions.jsonl");
+
+    let mut output = File::create(path)?;
+    for token_transaction in token_transactions.iter() {
+        let token_transaction = serde_json::to_string(token_transaction)? + "\n";
+        output.write_all(token_transaction.as_bytes())?;
     }
 
     output.flush()?;
@@ -58,6 +80,31 @@ async fn export_addresses(
         let address = serde_json::to_string(address)? + "\n";
 
         output.write_all(address.as_bytes())?;
+    }
+
+    output.flush()?;
+
+    Ok(())
+}
+
+async fn export_token_owners(
+    service_id: ServiceId,
+    sqlx_client: &SqlxClient,
+    mut path: PathBuf,
+) -> Result<()> {
+    path.push("token_owners.jsonl");
+
+    let mut output = File::create(path)?;
+
+    let addresses = sqlx_client.get_all_addresses(service_id).await?;
+    for address in addresses.iter() {
+        if let Ok(token_owner) = sqlx_client
+            .get_token_owner_by_owner_account(address.workchain_id, &address.hex)
+            .await
+        {
+            let token_owner = serde_json::to_string(&token_owner)? + "\n";
+            output.write_all(token_owner.as_bytes())?;
+        }
     }
 
     output.flush()?;
